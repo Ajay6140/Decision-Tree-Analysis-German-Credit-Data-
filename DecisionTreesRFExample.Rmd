@@ -1,0 +1,294 @@
+---
+title: "IDS 572 - DecisionTreesExample 2"
+author: "sidb"
+date: "Sept 19, 2018"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+
+IDS 572 - Continuing with decision trees using the rpart package
+
+```{r}
+#Install the 'rpart' package to develop deciction trees
+library('rpart')
+
+```
+
+```{r include = FALSE}
+#read the data, and examine summary statistics
+mdData=read.csv('D:/ids572/class/MortgageDefaultersDataSample.csv')
+summary(mdData)
+
+#cleanup -- remove the Status variable (from which the dependent variable, Outcome, is determined).
+#  Also remove the State variable (assume we do not want to use it here)
+md<- within(mdData, rm(State, Status))
+ # or you can remove by column number
+ #    md <- mdData[, -c(11,13)]
+
+#make sure that the variabes are set to the correct attribute type -- factor, integer, numeric
+str(md)
+
+#Inspect the data -- LoanValuetoAppraised shold not be a Factor(ie. categorical) variable.
+#Check the values -- looks like there are some values of "#DIV/0!"
+#Change these to 0.0
+
+md$LoanValuetoAppraised<-as.numeric(gsub("#DIV/0", "0.0", md$LoanValuetoAppraised))
+
+#replace NA values with 0.0  (may not be a good thing to do!!)
+md[is.na(md)]<-0.0
+
+#Inspect the summary on column values
+summary(md)
+```
+
+Split the data into training and validation sets, develop a model, plot the tree
+```{r}
+#split the data into training and test(validation) sets - 70% for training, rest for validation
+TRG_PCT=0.7
+nr=nrow(md)
+trnIndex = sample(1:nr, size = round(TRG_PCT*nr), replace=FALSE) #get a random 70%sample of row-indices
+mdTrn=md[trnIndex,]   #training data with the randomly selected row-indices
+mdTst = md[-trnIndex,]  #test data with the other row-indices
+
+#develop a tree on the training data
+rpModel1=rpart(OUTCOME ~ ., data=mdTrn, method="class")
+
+#plot the tree
+library(rpart.plot)
+rpart.plot::prp(rpModel1, type=2, extra=1)
+```
+
+Examine model performance
+```{r}
+#Obtain the model's predictions on the training data
+predTrn=predict(rpModel1, mdTrn, type='class')
+#Confusion table
+table(pred = predTrn, true=mdTrn$OUTCOME)
+#Accuracy
+mean(predTrn==mdTrn$OUTCOME)
+
+#Or you can combine the above two steps as:
+# table(pred=predict(rpModel1,mdTrn, type="class"), true=mdTrn$OUTCOME)
+#to get the prob for the two classes, use predict(...without the type='class')
+
+#Obtain the model's predictions on the test data
+ #combining the two steps for ge
+table(pred=predict(rpModel1, mdTst, type="class"), true=mdTst$OUTCOME)
+mean(predict(rpModel1, mdTst, type="class")==mdTst$OUTCOME)
+```
+
+Apply different classification threshold and examine performance
+```{r}
+CTHRESH=0.5
+
+predProbTrn=predict(rpModel1, mdTrn, type='prob')
+#Confusion table
+predTrn = ifelse(predProbTrn[, 'default'] >= CTHRESH, 'default', 'non-default')
+ct = table( pred = predTrn, true=mdTrn$OUTCOME)
+#Accuracy
+mean(predTrn==mdTrn$OUTCOME)
+```
+
+
+Lift curve
+```{r}
+#get the 'scores' from applying the model to the data
+predTrnProb=predict(rpModel1, mdTrn, type='prob')
+head(predTrnProb)
+```
+So the firts column in predTrnProb give the predicted prob(default) -- assume 'default' is the class of interest. Next we sort the data based on these values, group into say, 10 groups (deciles), and calculate cumulative response in each group
+```{r}
+#we need the score and actual class (OUTCOME) values
+trnSc <- subset(mdTrn, select=c("OUTCOME"))  # selects the OUTCOME column into trnSc
+trnSc["score"]<-predTrnProb[, 1]  #add a column named 'Score' with prob(default) values in teh first column of predTrnProb
+
+#sort by score
+trnSc<-trnSc[order(trnSc$score, decreasing=TRUE),]
+
+#we will next generate the cumulaive sum of the OUTCOME values -- for this, we want 'default'=1, and 'non-default'=0.   Notice that the OUTCOME is a factor (ie. categorical) variable
+str(trnSc)
+```
+```{r}
+levels(trnSc$OUTCOME)
+```
+So we should convert these to appropriate integer values 1 and 0
+```{r}
+levels(trnSc$OUTCOME)[1]<-1
+levels(trnSc$OUTCOME)[2]<-0
+# this has not changed OUTCOME -- it will now have factor levels '1' and '0'
+trnSc$OUTCOME<-as.numeric(as.character(trnSc$OUTCOME))
+str(trnSc)
+```
+```{r} 
+#obtain the cumulative sum of default cases captured
+trnSc$cumDefault<-cumsum(trnSc$OUTCOME)
+head(trnSc)
+```
+```{r}
+#Plot the cumDefault values (y-axis) by numCases (x-axis)
+plot(seq(nrow(trnSc)), trnSc$cumDefault,type = "l", xlab='#cases', ylab='#default')
+```
+
+
+
+ROCR curve -- you will need to install  the 'ROCR' package
+```{r}
+library('ROCR')
+
+#obtain the scores from the model for the class of interest, here, the prob('default')
+scoreTst=predict(rpModel1,mdTst, type="prob")[,'default']  
+   #same as predProbTst
+
+#now apply the prediction function from ROCR to get a prediction object
+rocPredTst = prediction(scoreTst, mdTst$OUTCOME, label.ordering = c('non-default', 'default'))  
+
+#obtain performance using the function from ROCR, then plot
+perfROCTst=performance(rocPredTst, "tpr", "fpr")
+plot(perfROCTst)
+
+#optimal cutoff
+cost.perf = performance(rocPredTst, "cost")
+rocPredTst@cutoffs[[1]][which.min(cost.perf@y.values[[1]])]
+
+
+#optimal cost with different costs for fp and fn
+cost.perf = performance(rocPredTst, "cost", cost.fp = 2, cost.fn = 1)
+rocPredTst@cutoffs[[1]][which.min(cost.perf@y.values[[1]])]
+
+#other performance measures with the performance function
+acc.perf = performance(rocPredTst, measure = "acc")
+plot(acc.perf)
+
+#AUC vaue
+auc.perf = performance(rocPredTst, measure = "auc")
+auc.perf@y.values
+```
+
+Examine the ROCR prediction object
+```{r}
+class(rocPredTst)
+slotNames(rocPredTst)
+sapply(slotNames(rocPredTst), function(x) class(slot(rocPredTst, x)))
+sapply(slotNames(rocPredTst), function(x) length(slot(rocPredTst, x)))
+```
+
+The prediction object has a set of slots with names as seen above.
+The slots hold values of predictions,  labels, cutoffs, fp values, ....etc.
+
+Similarly, examine the ROCR performance object
+```{r}
+class(acc.perf)
+slotNames(acc.perf)
+
+acc.perf@x.name   #values in the x.name slot
+acc.perf@y.name
+```
+So the x.values give the cutoff values and the y.values goves the corresponding accuracy. We can use these to find, for example, the cutoff corresponding to the maximum accuracy
+```{r}
+#The accuracy values are in y.values slot of the acc.perf object. 
+#This is a list, as seen by: 
+class(acc.perf@y.values)
+#... and we can get the values through 
+acc.perf@y.values[[1]]
+
+#get the index of the max value of accuracy
+ind=which.max(acc.perf@y.values[[1]])
+
+#get the accuracy value coresponding to this index
+acc = (acc.perf@y.values[[1]])[ind]
+
+#get the cutoff corresponding to this index
+cutoff = (acc.perf@x.values[[1]])[ind]
+
+#show these results
+print(c(accuracy= acc, cutoff = cutoff))
+```
+
+Similarly, for the optimal ROC curve based cutoff (using the "cost" as performance measure), we can get the corresponding TP and FP values
+```{r}
+cost.perf = performance(rocPredTst, "cost")
+optCutoff = rocPredTst@cutoffs[[1]][which.min(cost.perf@y.values[[1]])]
+optCutInd = which.max(perfROCTst@alpha.values[[1]] == optCutoff)
+
+#get the ROC curve values, i.e. TPRate and FPRate for different cutoffs
+perfROCTst=performance(rocPredTst, "tpr", "fpr")
+#You should check the slotNames of perROCTst....the FPRate is in x.values and TPRate is in y.values
+
+OptCutoff_FPRate = perfROCTst@x.values[[1]][optCutInd]
+OptCutoff_TPRate = perfROCTst@y.values[[1]][optCutInd]
+print(c(OptimalCutoff=optCutoff, FPRAte=OptCutoff_FPRate, TPRate =OptCutoff_TPRate))
+
+```
+
+Calculate the 'profit' lift for a model - for this we need the scores given by a model, and the actual class values.
+Assume a 'profit' value for correctly predicting a 'default' case, and a 'cost' for mistakes.
+First, sort by descending score values
+Then calculate the profits, and then the cumulative profits
+```{r}
+library(dplyr)
+
+PROFITVAL=3
+COSTVAL=-2
+
+scoreTst=predict(rpModel1,mdTst, type="prob")[,'default'] 
+prLifts=data.frame(scoreTst)
+prLifts=cbind(prLifts, mdTst$OUTCOME)
+     #check what is in prLifts ....head(prLifts)
+
+prLifts=prLifts[order(-scoreTst) ,]  #sort by descending score
+
+#add profit and cumulative profits columns
+prLifts<-prLifts %>% mutate(profits=ifelse(prLifts$`mdTst$OUTCOME`=='default', PROFITVAL, COSTVAL), cumProfits=cumsum(profits))
+
+plot(prLifts$cumProfits)
+
+#find the score coresponding to the max profit
+maxProfit= max(prLifts$cumProfits)
+maxProfit_Ind = which.max(prLifts$cumProfits)
+maxProfit_score = prLifts$scoreTst[maxProfit_Ind]
+print(c(maxProfit = maxProfit, scoreTst = maxProfit_score))
+```
+
+Random forest models - install the 'randomForest' library first
+```{r}
+library('randomForest')
+
+#for reproducible results, set a specific value for the random number seed
+set.seed(123)
+
+#develop a model with 200 trees, and obtain variable importance
+rfModel = randomForest(OUTCOME ~ ., data=mdTrn, ntree=200, importance=TRUE )
+#check the model -- see what OOB error rate it gives
+
+#Variable importance
+importance(rfModel)
+varImpPlot(rfModel)
+
+#Draw the ROC curve for the randomForest model
+perf_rf=performance(prediction(predict(rfModel,mdTst, type="prob")[,2], mdTst$OUTCOME), "tpr", "fpr")
+plot(perf_rf)
+```
+
+
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

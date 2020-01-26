@@ -1,0 +1,273 @@
+---
+title: "IDS 572 - Decision Trees Example"
+author: "sidb"
+date: "September 12, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+
+
+
+IDS 572 - Getting started with decision trees using the rpart package
+
+```{r}
+#Install the 'rpart' package to develop deciction trees
+library('rpart')
+
+```
+
+```{r}
+#read the data, and examine summary statistics
+mdData=read.csv('/Volumes/AJAY/Grad School/Data Mining For Business/ASSGN 1/MortgageDefaultersDataSample.csv')
+summary(mdData)
+```
+
+```{r}
+#cleanup -- remove the Status variable (since the the dependent variable, Outcome, is derived from Status - so we shud not use Status as an independent var).
+#  Also remove the State variable (assume we do not want to use it here)
+md<- within(mdData, rm(State, Status))
+ # or you can remove by column number
+ #    md <- mdData[, -c(11,13)]
+```
+
+```{r}
+#make sure that the variabes are set to the correct attribute type -- factor, integer, numeric
+str(md)
+```
+
+Inspect the data -- LoanValuetoAppraised shold not be a Factor(ie. categorical) variable.
+Check the values -- looks like there are some values of "#DIV/0!"
+Change these to 0.0
+```{r}
+# Will this work? -- try and check result in x
+#   x<-as.numeric(gsub("#DIV/0", "0.0", md$LoanValuetoAppraised))
+
+#If this works
+md$LoanValuetoAppraised<-as.numeric(gsub("#DIV/0", "0", md$LoanValuetoAppraised))
+
+#Inspect the summary on column values
+summary(md)
+```
+
+
+
+```{r}
+#develope a rpart decision tree model
+rpModel1=rpart(OUTCOME ~ ., data=md, method="class")
+
+#print the model -- text form
+print(rpModel1)
+```
+
+Q. how do you interpret each line above? How is 'loss' determined?
+
+
+
+Now display/plot the tree 
+```{r}
+plot(rpModel1, uniform=TRUE,  main="Decision Tree for Mortgage Defaulters")
+text(rpModel1, use.n=TRUE, all=TRUE, cex=.7)
+```
+
+Nicer way to display the tree using the rpart.plot package
+```{r}
+library(rpart.plot)
+
+rpart.plot::prp(rpModel1, type=2, extra=1)
+# more information on such plots are in "Plotting rpart trees with the rpart.plot package" (http://www.milbo.org/rpart-plot/prp.pdf)
+
+```
+
+
+
+
+Next, split the data into training and validation sets, develope a model in the training data, and examine performance.
+```{r}
+#split the data into training and test(validation) sets - 70% for training, rest for validation
+nr=nrow(md)
+trnIndex = sample(1:nr, size = round(0.7*nr), replace=FALSE) #get a random 70%sample of row-indices
+mdTrn=md[trnIndex,]   #training data with the randomly selected row-indices
+mdTst = md[-trnIndex,]  #test data with the other row-indices
+
+dim(mdTrn) 
+dim(mdTst)
+```
+
+```{r}
+#develop a tree on the training data
+rpModel2=rpart(OUTCOME ~ ., data=mdTrn, method="class")
+
+#Obtain the model's predictions on the training data
+predTrn=predict(rpModel2, mdTrn, type='class')
+#Confusion table
+table(pred = predTrn, true=mdTrn$OUTCOME)
+#Accuracy
+mean(predTrn==mdTrn$OUTCOME)
+
+#Or you can combine the above two steps as:
+#   table(pred=predict(rpModel2,mdTrn, type="class"), true=mdTrn$OUTCOME)
+#To get the prob for the two classes, use predict(...without the type='class')
+
+
+#Obtain the model's predictions on the test data
+ #combining the two steps for ge
+table(pred=predict(rpModel2,mdTst, type="class"), true=mdTst$OUTCOME)
+
+```
+Q. What is the accuracy on the validation data?
+
+
+Lift curve
+```{r}
+#get the 'scores' from applying the model to the data
+predTrnProb=predict(rpModel2, mdTrn, type='prob')
+head(predTrnProb)
+```
+So the firts column in predTrnProb give the predicted prob(default) -- assume 'default' is the class of interest. Next we sort the data based on these values, group into say, 10 groups (deciles), and calculate cumulative response in each group.
+```{r}
+#we need the score and actual class (OUTCOME) values
+trnSc <- subset(mdTrn, select=c("OUTCOME"))  # selects the OUTCOME column into trnSc
+trnSc$score<-predTrnProb[, 1]  #add a column named 'Score' with prob(default) values in the first column of predTrnProb
+
+#sort by score
+trnSc<-trnSc[order(trnSc$score, decreasing=TRUE),]
+
+#we will next generate the cumulaive sum of the OUTCOME values -- for this, we want 'default'=1, and 'non-default'=0.   Notice that the OUTCOME is a factor (ie. categorical) variable
+str(trnSc)
+```
+```{r}
+levels(trnSc$OUTCOME)
+```
+So we should convert these to appropriate integer values 1 and 0
+```{r}
+levels(trnSc$OUTCOME)[1]<-1
+levels(trnSc$OUTCOME)[2]<-0
+# this has not changed OUTCOME -- it will now have factor levels '1' and '0'
+trnSc$OUTCOME<-as.numeric(as.character(trnSc$OUTCOME))
+str(trnSc)
+```
+
+```{r} 
+#obtain the cumulative sum of default cases captured
+trnSc$cumDefault<-cumsum(trnSc$OUTCOME)
+head(trnSc)
+```
+```{r}
+#Plot the cumDefault values (y-axis) by numCases (x-axis)
+plot(seq(nrow(trnSc)), trnSc$cumDefault,type = "l", xlab='#cases', ylab='#default')
+```
+
+
+Calculate the lift table.
+Install the load the dpylr package - makes thing easier, we will use it for much more later
+```{r}
+library(dplyr)
+
+#Divide the data into 10 (for decile lift) equal groups
+trnSc["bucket"]<-ntile(-trnSc[,"score"], 10)  
+     # this creates a new column with group number for each row
+
+#group the data by the 'buckets', and obtain summary statistics 
+decGroups<-group_by(trnSc, bucket)
+decLifts<-summarise(decGroups, count=n(), numDefaults=sum(OUTCOME))
+decLifts<-decLifts %>% mutate(defRate=numDefaults/count, cumDefRate=cumsum(numDefaults)/cumsum(count),       lift=cumDefRate/(sum(numDefaults)/sum(count)) )
+
+#look at the table
+
+#you can do various plots, for example
+plot(decLifts$bucket, decLifts$lift, xlab="deciles", ylab="Cumulative Decile Lift", type="l")
+barplot(decLifts$numDefaults, main="numDefaults by decile", xlab="deciles")
+
+#(there are different packages to give us the lift, etc., but it is useful to be able to do customized calculations)
+```
+
+
+```{r}
+#Using the 'lift' package
+library('lift')
+
+plotLift(trnSc$score, trnSc$OUTCOME)
+
+#value of lift in the top decile
+TopDecileLift(trnSc$score, trnSc$OUTCOME)
+
+```
+
+Or, using the ROCR package
+```{r}
+library('ROCR')
+pred<- prediction(trnSc$score, trnSc$OUTCOME)
+
+liftPerf<-performance(pred, "lift", "rpp")
+plot(liftPerf, main="Lift chart")
+
+#or plot the 'gain' -- tpr vs rpp
+gainPerf<-performance(pred, "tpr", "rpp")
+plot(gainPerf, main="Gain chart")
+```
+Q. are these plots similar to what we obtained earlier from our own calculations
+
+
+
+Now lets take a look at some tree-building parameters
+```{r}
+rpModel2<-rpart(OUTCOME ~ ., data=mdTrn, parms = list(split ='gini'))
+rpModel3<-rpart(OUTCOME ~ ., data=mdTrn, parms = list(split ='information'))
+print(rpModel3)
+
+#rpart.control can be used to set parameters like minCasesForSplit, minCasesAtLeaf, maxDepth,.....(see https://stat.ethz.ch/R-manual/R-devel/library/rpart/html/rpart.control.html)
+rpModel4<-rpart(OUTCOME ~ ., data=mdTrn, parms = list(split ='gini'), control= rpart.control(minsplit=20, maxdepth=15))
+
+
+```
+
+
+Let's take a look at some details on the tree mode (rpModel1)
+```{r}
+#cost-complexity parameter for different levels of pruning
+#    - this shows number of splits in the tree for different values of the  cp 
+#       parameter, and the cross-validation error
+printcp(rpModel1)
+
+#or plot this
+plotcp(rpModel1)
+
+```
+
+
+```{r}
+#Take a look at surrogate splits for the decision tree model (rpModel1)
+summary(rpModel1)
+
+#Q. What do you understand from this output?
+```
+
+```{r}
+#Variable importance as given by a decision tree model
+rpModel1$variable.importance
+
+```
+
+
+
+
+
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

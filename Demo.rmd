@@ -1,0 +1,250 @@
+---
+title: "IDS 572 - DecisionTreesExample"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+
+
+
+IDS 572 - Getting started with decision trees using the rpart package
+
+
+Install the necessary packages
+```{r, eval = FALSE}
+install.packages("C50")
+install.packages("rpart.plot")
+install.packages("ROCR")
+install.packages("randomForest")
+```
+
+```{r}
+#Install the 'rpart' package to develop deciction trees
+library('rpart')
+```
+
+```{r}
+#read the data, and examine summary statistics
+mdData <- read_excel("/Volumes/AJAY/Grad School/Data Mining For Business/ASSGN 1/GER_dev.xlsx")
+summary(mdData)
+attributes(mdData)
+```
+
+```{r}
+#make sure that the variabes are set to the correct attribute type -- factor, integer, numeric
+str(mdData)
+```
+
+Choose some columns to coerce to factor (Below is a list of some, you have to set the correct attribute for others)
+```{r}
+cols <- c("RESPONSE", "FOREIGN", "TELEPHONE", "OWN_RES")
+mdData[cols] <- lapply(mdData[cols], factor)
+sapply(mdData, class)
+#Removing the extra variable,X, created during file import.
+mdData$X <- NULL
+str(mdData)
+```
+
+Basic plotting of dependent variable 
+```{r}
+summary(mdData)
+plot(mdData$RESPONSE)
+```
+
+Additional plotting of other variables
+
+```{r}
+library(ggplot2)
+dat <- data.frame(table(mdData$FOREIGN,mdData$RESPONSE))
+names(dat) <- c("FOREIGN","RESPONSE","Count")
+ggplot(data=dat, aes(x=FOREIGN, y=Count, fill=RESPONSE)) + geom_bar(stat="identity")
+```
+
+Additional plotting of other variables
+
+```{r}
+library(ggplot2)
+dat <- data.frame(table(mdData$SAV_ACCT,mdData$RESPONSE))
+names(dat) <- c("SAV_ACCT","RESPONSE","Count")
+ggplot(data=dat, aes(x=SAV_ACCT, y=Count, fill=RESPONSE)) + geom_bar(stat="identity")
+```
+
+```{r}
+#develope a rpart decision tree model
+library(rpart)
+rpModel1=rpart(RESPONSE ~ ., data=mdData, method="class",  parms = list(split = 'information'))
+
+#print the model -- text form
+print(rpModel1)
+summary(rpModel1)
+```
+While developing the tree, please try different arguments like -  1) minsplit is ???the minimum number of observations that must exist in a node in order for a split to be attempted??? and 2) minbucket is ???the minimum number of observations in any terminal node???
+
+
+```{r}
+#Obtain the model's predictions on the training data
+predTrn_whole=predict(rpModel1, data=mdData, type='class')
+#Confusion table
+table(pred = predTrn_whole, true=mdData$RESPONSE)
+#Accuracy
+mean(predTrn_whole==mdData$RESPONSE)
+```
+
+
+Building the C5 decision tree requires installation of the package - c5. 
+```{r}
+library(C50)
+cModel1=C5.0(RESPONSE ~ ., data=mdData, method="class")
+summary(cModel1)
+#Replace rpart function by C5.0 to build the tree
+```
+
+Now display/plot the tree 
+```{r}
+plot(rpModel1, uniform=TRUE,  main="Decision Tree")
+text(rpModel1, use.n=TRUE, all=TRUE, cex=.7)
+```
+
+Nicer way to display the tree using the rpart.plot package
+```{r}
+library(rpart.plot)
+
+rpart.plot::prp(rpModel1, type=2, extra=1)
+# more information on such plots are in "Plotting rpart trees with the rpart.plot package" (http://www.milbo.org/rpart-plot/prp.pdf)
+
+```
+
+
+Next, split the dat ainto training and validation sets, develope a model in the training data, and examine performance.
+```{r}
+#split the data into training and test(validation) sets - 70% for training, rest for validation
+nr=nrow(mdData)
+trnIndex = sample(1:nr, size = round(0.6*nr), replace=FALSE) #get a random 70%sample of row-indices
+mdTrn=mdData[trnIndex,]   #training data with the randomly selected row-indices
+mdTst = mdData[-trnIndex,]  #test data with the other row-indices
+
+dim(mdTrn) 
+dim(mdTst)
+```
+
+```{r}
+#develop a tree on the training data
+set.seed(123)
+rpModel2=rpart(RESPONSE ~ ., data=mdTrn, method="class")
+
+#Obtain the model's predictions on the training data
+predTrn=predict(rpModel2, mdTrn, type='class')
+#Confusion table
+table(pred = predTrn, true=mdTrn$RESPONSE)
+#Accuracy
+mean(predTrn==mdTrn$RESPONSE)
+
+#Or you can combine the above two steps as:
+# table(pred=predict(rpModel2,mdTrn, type="class"), true=mdTrn$OUTCOME)
+#to get the prob for the two classes, use predict(...without the type='class')
+```
+
+
+
+Confusion Table Statistics 
+Precision is defined as the fraction of correct predictions for a certain class, whereas recall is the fraction of instances of a class that were correctly predicted. Notice that there is an obvious trade off between these 2 metrics. It is defined as the harmonic mean (or a weighted average) of precision and recall.
+
+```{r}
+#Obtain the model's predictions on the test data
+ #combining the two steps for ge
+cm <- table(pred=predict(rpModel2,mdTst, type="class"), true=mdTst$RESPONSE)
+n = sum(cm) # number of instances
+diag = diag(cm) # number of correctly classified instances per class 
+rowsums = apply(cm, 2, sum) # number of instances per class
+colsums = apply(cm, 1, sum) # number of predictions per class
+p = rowsums / n # distribution of instances over the actual classes
+q = colsums / n # distribution of instances over the predicted classes
+accuracy = sum(diag) / n 
+accuracy
+precision = diag / colsums 
+recall = diag / rowsums 
+f1 = 2 * precision * recall / (precision + recall) 
+```
+
+Apply different classification threshold and examine performance on train
+```{r}
+CTHRESH=0.5
+
+predProbTrn=predict(rpModel1, mdTrn, type='prob')
+#Confusion table
+predTrn = ifelse(predProbTrn[,'1'] >= CTHRESH, '1', '0')
+ct = table( pred = predTrn, true=mdTrn$RESPONSE)
+#Accuracy
+mean(predTrn==mdTrn$RESPONSE)
+```
+
+
+
+
+Calculating ROC and Lift curves using ROCR
+```{r}
+#score test data set
+library(ROCR)
+#score test data set
+mdTst$score<-predict(rpModel2,type='prob',mdTst)
+pred<-prediction(mdTst$score[,2],mdTst$RESPONSE)
+perf <- performance(pred,"tpr","fpr")
+plot(perf)
+
+```
+*Q3)a  DTs with misclassification costs using rpart*
+Cost Matrix
+It is worse to class a customer as good when they are bad (5), than it is to class a customer as bad when they are good (1)
+```{r}
+costMatrix <- matrix(c(0,1,5, 0), byrow=TRUE, nrow=2)
+colnames(costMatrix) <- c('Predict Good','Predict Bad')
+rownames(costMatrix) <- c('Actual Good','Actual Bad')
+costMatrix
+
+rpTree = rpart(RESPONSE ~ ., data=mdTrn, method="class", parms = list( prior = c(.70,.30), loss = costMatrix, split = "information"))
+
+```
+
+```{r}
+#Calculate and apply the ???theoretical??? threshold and assess performance*
+th = costMatrix[2,1]/(costMatrix[2,1] + costMatrix[1,2])
+th
+```
+
+```{r}
+library('randomForest')
+
+#for reproducible results, set a specific value for the random number seed
+set.seed(123)
+mdTrn.imputed <- rfImpute(RESPONSE ~ ., mdTrn)
+#develop a model with 200 trees, and obtain variable importance
+rfModel = randomForest(factor(RESPONSE) ~ ., data=mdTrn.imputed, ntree=200, importance=TRUE )
+#check the model -- see what OOB error rate it gives
+
+#Variable importance
+a <- importance(rfModel)
+varImpPlot(rfModel)
+
+#Draw the ROC curve for the randomForest model
+perf_rf=performance(prediction(predict(rfModel,mdTst, type="prob")[,2], mdTst$RESPONSE), "tpr", "fpr")
+plot(perf_rf)
+```
+row.has.na <- apply(mdTrn, 1, function(x){any(is.na(x))})
+predictors_no_NA <- mdTrn[!row.has.na,]
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
